@@ -32,6 +32,8 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    # Only succeeds when Pages' source is GitHub Actions. With "Deploy from a branch" the repo is served as is.
+    continue-on-error: true
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
