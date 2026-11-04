@@ -45,6 +45,11 @@ const $ = id => document.getElementById(id);
 const stage = $('stage'), still = $('still'), floorsEl = $('floors'), zonesEl = $('zones'), pinsEl = $('pins'), tipEl = $('floorTip');
 const players = [$('clipA'), $('clipB')];
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+// A personalised link (?for=Name) greets the buyer. Inside a microsite (?embed=1) the page around the tour keeps the scroll wheel, vertical swipes and the back button.
+const params = new URLSearchParams(location.search);
+const guest = (params.get('for') || '').trim().slice(0, 40);
+const embedded = params.has('embed');
 const clipSize = Math.max(innerWidth, innerHeight) < 1000 ? '854' : '1280';
 
 const stillUrl = name => `assets/stills/${name}.webp`;
@@ -170,7 +175,7 @@ async function run() {
 function go(node, push = true) {
   if (!NODES[node] || node === target) return;
   target = node;
-  if (push) history.pushState(null, '', '#' + node);
+  if (push) history[embedded ? 'replaceState' : 'pushState'](null, '', '#' + node);
   renderDock();
   run();
 }
@@ -315,6 +320,7 @@ $('back').onclick = up;
 
 let wheelSum = 0, wheelLock = 0;
 addEventListener('wheel', e => {
+  if (embedded) return;
   const now = performance.now();
   if (running || now < wheelLock) return;
   wheelSum += e.deltaY;
@@ -329,6 +335,7 @@ addEventListener('touchstart', e => { touchStart = e.touches[0]; }, { passive: t
 addEventListener('touchend', e => {
   if (!touchStart || e.target.closest('.chips')) return;
   const t = e.changedTouches[0], dx = t.clientX - touchStart.clientX, dy = t.clientY - touchStart.clientY;
+  if (embedded && Math.abs(dy) > Math.abs(dx)) return;
   if (Math.hypot(dx, dy) > 60) step(Math.abs(dx) > Math.abs(dy) ? -Math.sign(dx) : -Math.sign(dy));
 }, { passive: true });
 
@@ -380,7 +387,18 @@ async function preload() {
 
 addEventListener('popstate', () => go(location.hash.slice(1) || 'tower', false));
 
+function personalise() {
+  document.body.classList.toggle('embedded', embedded);
+  if (!guest) return;
+  document.querySelector('.intro .eyebrow').textContent = `Prepared for ${guest}`;
+  const greeting = $('greeting');
+  greeting.textContent = `For ${guest}`;
+  greeting.hidden = false;
+  document.title = `${BUILDING.name} — Virtual Tour for ${guest}`;
+}
+
 function start() {
+  personalise();
   buildFloors();
   buildZones();
   const hash = location.hash.slice(1);
