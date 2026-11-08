@@ -74,3 +74,26 @@ body.three-on .apt3d { opacity: 1; pointer-events: auto; }
   .spot { height: 26px; font-size: 11.5px; }
   .spot.info:not(.on) { display: none; }
 }
+
+/* First person in a room: drag (or turn the phone) to look around. */
+.stage img { -webkit-user-drag: none; user-select: none; }
+body:not([data-node="tower"]):not([data-node="home"]) .viewport { cursor: grab; }
+body.looking .viewport { cursor: grabbing; }
+body.embedded:not([data-node="tower"]):not([data-node="home"]) .viewport { touch-action: pan-y; }
+.look-hint {
+  position: fixed; z-index: 2; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px; pointer-events: none;
+  background: var(--ink-soft); border: 1px solid var(--line); border-radius: 99px;
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); font-size: 13px; white-space: nowrap;
+  animation: hint-in 500ms var(--ease) both;
+}
+.look-hint::before { content: "⟷"; color: var(--brass); font-size: 15px; }
+.look-hint[hidden] { display: none; }
+@keyframes hint-in { from { opacity: 0; transform: translate(-50%, -40%); } }
+@media (prefers-reduced-motion: reduce) { .look-hint { animation: none; } }
+.fp-pins { position: fixed; inset: 0; z-index: 1; pointer-events: none; transition: opacity 320ms var(--ease); }
+body.moving .fp-pins, body[data-node="tower"] .fp-pins, body[data-node="home"] .fp-pins { opacity: 0; }
+.fp-pins .pin { pointer-events: auto; }
+.pin.edge-l::before, .pin.edge-r::before { content: "‹"; width: auto; height: auto; background: none; box-shadow: none; animation: none; color: var(--brass); font-size: 17px; line-height: 1; }
+.pin.edge-r { flex-direction: row-reverse; padding: 0 9px 0 12px; }
+.pin.edge-r::before { content: "›"; }

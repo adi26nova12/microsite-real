@@ -69,6 +69,11 @@ const SPOTS = [
   { room: null, label: 'Balcony', at: [-0.453, -0.011, 0.053], specs: 'Glass railing · anti-skid tiles' },
 ];
 
+// Inside a room you stand where the render's camera stood. SRC_FOV is the renders' horizontal lens angle (degrees);
+// ROOM_ZOOM is how far the view is narrowed inside it, which is the room left over for looking around.
+const SRC_FOV = 90;
+const ROOM_ZOOM = { landscape: 1.4, portrait: 1.2 };
+
 /* Engine */
 const $ = id => document.getElementById(id);
 const stage = $('stage'), still = $('still'), seqEl = $('seq'), housesEl = $('houses'), pinsEl = $('pins'), tipEl = $('houseTip');
@@ -188,10 +193,20 @@ async function walk(to, forward, rate) {
 async function move(from, to, rate) {
   const edge = edgeOf(from, to), forward = ORDER.indexOf(to) > ORDER.indexOf(from);
   const seq = edge?.[2];
-  // Between the 3D model and a room, the photograph is set beneath the model and the model fades away (or back).
-  if (from === 'home' && to !== 'tower') { await showStill(to); return show3d(false); }
-  if (to === 'home' && from !== 'tower') { await show3d(true); return showStill(to); }
+  // From the 3D model into a room the camera dives down to it, then the model fades and you're standing in the room.
+  if (from === 'home' && to !== 'tower') {
+    await diveTo(to);
+    await showStill(to);
+    firstPerson(true, true);
+    return show3d(false);
+  }
+  if (to === 'home' && from !== 'tower') { await show3d(true); firstPerson(false); return showStill(to); }
   if (from === 'home') await show3d(false);
+  // Room to room: you walk through while your head turns back to face straight ahead.
+  if (inRoom(from) && inRoom(to)) {
+    await Promise.all([walk(to, forward, rate), reducedMotion ? centreLook() : lookTo(0, 0, Math.round(760 / rate))]);
+    return;
+  }
   if (seq && !reducedMotion && await playSequence(seq, edge[0] !== from, rate)) {
     await showStill(to);
     if (to === 'home') await show3d(true);
@@ -230,14 +245,29 @@ function placeSpots() {
   });
 }
 
-// Fly the camera down to a room and offer its photograph.
-function openSpot(i) {
-  const s = SPOTS[i], b = model.querySelector(`[slot="hotspot-${i}"]`), size = model.getDimensions();
+// Fly the camera down to a spot on the model; `near` is the distance as a share of the residence's width.
+function flyTo(i, near, polar) {
+  const b = model.querySelector(`[slot="hotspot-${i}"]`), size = model.getDimensions();
+  if (!b) return;
   model.autoRotate = false;
   model.cameraTarget = b.dataset.position;
-  model.cameraOrbit = `${model.getCameraOrbit().theta}rad 45deg ${Math.max(size.x, size.z) * 0.6}m`;
+  model.cameraOrbit = `${model.getCameraOrbit().theta}rad ${polar} ${Math.max(size.x, size.z) * near}m`;
   model.querySelectorAll('.spot.on').forEach(x => x.classList.remove('on'));
   b.classList.add('on');
+}
+async function diveTo(room) {
+  const i = SPOTS.findIndex(s => s.room === room);
+  if (i < 0 || reducedMotion || !model.loaded) return;
+  closeSpot();
+  flyTo(i, 0.25, '35deg');
+  await sleep(700);
+}
+
+// A room on the model takes you straight into it; the kitchen and balcony have no photograph, so they show a card.
+function openSpot(i) {
+  const s = SPOTS[i];
+  if (s.room) return go(s.room);
+  flyTo(i, 0.6, '45deg');
   $('spotTitle').textContent = s.label;
   $('spotSpecs').textContent = s.specs || NODES[s.room].specs || '';
   $('spotGo').hidden = !s.room;
@@ -261,11 +291,211 @@ model.addEventListener('load', placeSpots);
 // In a microsite, vertical swipes over the model still scroll the page around it.
 if (embedded) model.setAttribute('touch-action', 'pan-y');
 
+/* First person: in a room, the render is the view in front of you, set at the distance that matches its lens.
+   Dragging (or turning the phone) turns your head inside it, so the perspective shifts the way a real room does. */
+const zoomer = $('zoomer'), viewport = $('viewport'), hint = $('lookHint'), fpPinsEl = $('fpPins');
+const inRoom = n => ROOMS.includes(n) && n !== 'home';
+const look = { on: false, y: 0, p: 0, ty: 0, tp: 0, gy: 0, gp: 0, W: 0, H: 0, P: 1, k: 1, raf: 0, drag: null, tween: false, gyro: false };
+
+function lens() {
+  look.k = innerWidth < innerHeight ? ROOM_ZOOM.portrait : ROOM_ZOOM.landscape;
+  look.W = stage.offsetWidth * look.k;
+  look.H = stage.offsetHeight * look.k;
+  look.P = look.W / 2 / Math.tan(SRC_FOV * Math.PI / 360);
+  viewport.style.perspective = look.P + 'px';
+}
+
+// Does the screen stay inside the render with the head turned y (right +) and tilted p (up +), both in radians?
+function sees(y, p) {
+  const { W, H, P } = look, cy = Math.cos(y), sy = Math.sin(y), cp = Math.cos(p), sp = Math.sin(p);
+  for (const u of [-innerWidth / 2, innerWidth / 2]) for (const v of [-innerHeight / 2, innerHeight / 2]) {
+    const y1 = v * cp + P * sp, z1 = v * sp - P * cp; // corner ray, tilted
+    const x2 = u * cy - z1 * sy, z2 = u * sy + z1 * cy; // then turned
+    if (z2 >= 0) return false;
+    const t = -P / z2;
+    if (Math.abs(x2 * t) > W / 2 + 0.5 || Math.abs(y1 * t) > H / 2 + 0.5) return false;
+  }
+  return true;
+}
+function bisect(ok) {
+  let lo = 0, hi = 1;
+  for (let i = 0; i < 14; i++) { const m = (lo + hi) / 2; if (ok(m)) lo = m; else hi = m; }
+  return lo;
+}
+// Turning sideways wins over tilting: the sideways limit is taken level, then the tilt is fitted to it.
+function clampLook(y, p) {
+  if (sees(y, p)) return [y, p];
+  if (!sees(y, 0)) y *= bisect(t => sees(y * t, 0));
+  if (!sees(y, p)) p *= bisect(t => sees(y, p * t));
+  return [y, p];
+}
+
+function applyLook() {
+  zoomer.style.transform = `translateZ(${look.P}px) rotateX(${look.p}rad) rotateY(${look.y}rad) translateZ(${-look.P}px) scale(${look.k})`;
+  placePins();
+}
+
+// Doorway pins sit on the screen, not on the render, so one that's off to the side waits at the edge pointing the way.
+function placePins() {
+  const cy = Math.cos(look.y), sy = Math.sin(look.y), cp = Math.cos(look.p), sp = Math.sin(look.p), P = look.P;
+  const top = 76, bottom = innerHeight - (innerWidth <= 820 ? 150 : 104);
+  for (const b of fpPinsEl.children) {
+    const X = (b.dataset.x / 100 - 0.5) * look.W, Y = (0.5 - b.dataset.y / 100) * look.H;
+    const x1 = cy * X - sy * P, z1 = -sy * X - cy * P; // turned
+    const y2 = cp * Y + sp * z1, z2 = -sp * Y + cp * z1; // then tilted
+    let sx = innerWidth / 2 + x1 * P / -z2, sY = innerHeight / 2 - y2 * P / -z2;
+    const half = b.offsetWidth / 2 + 12;
+    const side = sx < half ? 'l' : sx > innerWidth - half ? 'r' : '';
+    sx = Math.max(half, Math.min(innerWidth - half, sx));
+    sY = Math.max(top, Math.min(bottom, sY));
+    b.style.left = sx + 'px';
+    b.style.top = sY + 'px';
+    b.classList.toggle('edge-l', side === 'l');
+    b.classList.toggle('edge-r', side === 'r');
+  }
+}
+function lookLoop() {
+  if (!look.on) return void (look.raf = 0);
+  const [y, p] = clampLook(look.ty + look.gy, look.tp + look.gp);
+  // Dragging past the edge doesn't wind up: the aim stops where the view stops. (A phone turned past the edge
+  // isn't trimmed, so the view comes back to the same place when the phone does.)
+  if (look.drag || !look.gyro) {
+    look.ty = y - look.gy;
+    look.tp = p - look.gp;
+  }
+  const ease = look.drag || look.tween ? 0.5 : 0.18;
+  look.y += (y - look.y) * ease;
+  look.p += (p - look.p) * ease;
+  applyLook();
+  const busy = look.drag || look.tween || look.gyro || Math.abs(y - look.y) + Math.abs(p - look.p) > 1e-4;
+  look.raf = look.on && busy ? requestAnimationFrame(lookLoop) : 0;
+}
+const kick = () => { if (look.on && !look.raf) look.raf = requestAnimationFrame(lookLoop); };
+
+async function lookTo(y, p, ms) {
+  const y0 = look.ty, p0 = look.tp, t0 = performance.now();
+  look.tween = true;
+  kick();
+  for (let k = 0; k < 1;) {
+    await nextFrame();
+    k = Math.min(1, (performance.now() - t0) / ms);
+    const e = 1 - (1 - k) ** 3;
+    look.ty = y0 + (y - y0) * e;
+    look.tp = p0 + (p - p0) * e;
+  }
+  look.tween = false;
+  look.y = look.ty + look.gy;
+  look.p = look.tp + look.gp;
+  if (look.on) applyLook();
+}
+function centreLook() {
+  look.y = look.p = look.ty = look.tp = 0;
+  if (look.on) applyLook();
+}
+
+// The angle to a point on the render, given as % of the stage like the room pins.
+function aimAt(x, y) {
+  const u = (x / 100 - 0.5) * look.W, v = (0.5 - y / 100) * look.H;
+  return clampLook(Math.atan2(u, look.P), Math.atan2(v, Math.hypot(u, look.P)));
+}
+
+let hinted = false, hintTimer = 0;
+function showHint() {
+  if (hinted) return;
+  hinted = true;
+  hint.textContent = matchMedia('(pointer: coarse)').matches ? 'Drag, or turn your phone, to look around' : 'Drag to look around the room';
+  hint.hidden = false;
+  hintTimer = setTimeout(hideHint, 4200);
+}
+function hideHint() { clearTimeout(hintTimer); hint.hidden = true; }
+
+function firstPerson(on, sweep) {
+  if (on === look.on) return;
+  look.on = on;
+  if (!on) {
+    cancelAnimationFrame(look.raf);
+    look.raf = 0;
+    look.drag = null;
+    centreLook();
+    viewport.style.perspective = zoomer.style.transform = zoomer.style.transition = '';
+    return hideHint();
+  }
+  tx = ty = px = py = 0;
+  stage.style.transform = '';
+  zoomer.style.transition = 'none';
+  gyroBase = null;
+  look.gy = look.gp = 0;
+  lens();
+  centreLook();
+  showHint();
+  // Arriving, the head starts turned a little and comes round to face the room, which says "you can look around".
+  if (sweep && !reducedMotion) {
+    look.ty = look.y = clampLook(1, 0)[0] * 0.8;
+    applyLook();
+    lookTo(0, 0, 1800);
+  }
+  kick();
+}
+
+viewport.addEventListener('dragstart', e => e.preventDefault());
+viewport.addEventListener('pointerdown', e => {
+  if (!look.on || running || e.button > 0 || e.target.closest('.pin')) return;
+  if (e.pointerType === 'mouse') e.preventDefault();
+  look.drag = { id: e.pointerId, x: e.clientX, y: e.clientY, ty: look.ty, tp: look.tp };
+  document.body.classList.add('looking');
+  hideHint();
+  kick();
+});
+// Grab and drag: the room follows the finger.
+addEventListener('pointermove', e => {
+  const d = look.drag;
+  if (!d || e.pointerId !== d.id) return;
+  look.ty = d.ty - (e.clientX - d.x) / look.P;
+  look.tp = d.tp + (e.clientY - d.y) / look.P;
+});
+function endDrag(e) {
+  if (!look.drag || e.pointerId !== look.drag.id) return;
+  look.drag = null;
+  document.body.classList.remove('looking');
+  if (e.type === 'pointerup' && e.pointerType === 'touch') askMotion();
+}
+addEventListener('pointerup', endDrag);
+addEventListener('pointercancel', endDrag);
+
+// On a phone, turning the phone turns your head. The aim is where the back of the phone points, relative to where it
+// pointed when the room opened, so it works however the phone is held.
+let gyroBase = null;
+function onTilt(e) {
+  if (!look.on || e.alpha == null || e.beta == null) return;
+  const r = Math.PI / 180, a = e.alpha * r, b = e.beta * r, g = (e.gamma || 0) * r;
+  const fx = -Math.cos(a) * Math.sin(g) - Math.sin(a) * Math.sin(b) * Math.cos(g);
+  const fy = -Math.sin(a) * Math.sin(g) + Math.cos(a) * Math.sin(b) * Math.cos(g);
+  const fz = -Math.cos(b) * Math.cos(g);
+  const heading = Math.atan2(fx, fy), elevation = Math.asin(Math.max(-1, Math.min(1, fz)));
+  if (!gyroBase) gyroBase = { heading, elevation };
+  let dh = heading - gyroBase.heading;
+  dh = Math.atan2(Math.sin(dh), Math.cos(dh));
+  look.gy = dh;
+  look.gp = elevation - gyroBase.elevation;
+  look.gyro = true;
+  kick();
+}
+let motionAsked = false;
+function askMotion() {
+  const D = window.DeviceOrientationEvent;
+  if (motionAsked || !D?.requestPermission) return;
+  motionAsked = true;
+  D.requestPermission().catch(() => {});
+}
+// Listen everywhere; on iPhone the readings only start once the first touch in a room has asked for motion access.
+addEventListener('deviceorientation', onTilt);
+
 async function run() {
   if (running) return;
   running = true;
   document.body.classList.add('moving');
   pinsEl.replaceChildren();
+  fpPinsEl.replaceChildren();
   setTip(false);
   if (current === 'tower') { panTo(50); await sleep(460); }
   let walking = false; // a walk through several rooms keeps one brisker pace from start to finish
@@ -425,16 +655,25 @@ function resumeAuto() {
 
 /* Room pins */
 function renderPins() {
-  pinsEl.replaceChildren(...(PINS[current] || []).map(([room, x, y]) => {
+  fpPinsEl.replaceChildren();
+  (look.on ? fpPinsEl : pinsEl).replaceChildren(...(PINS[current] || []).map(([room, x, y]) => {
     const b = document.createElement('button');
     b.type = 'button';
     b.className = 'pin';
+    b.dataset.x = x;
+    b.dataset.y = y;
     b.style.left = x + '%';
     b.style.top = y + '%';
     b.textContent = NODES[room].title;
-    b.onclick = () => go(room);
+    // Turn to face the doorway first, then walk through it.
+    b.onclick = async () => {
+      if (running || look.tween) return;
+      if (look.on && !reducedMotion) await lookTo(...aimAt(x, y).map((a, i) => a - (i ? look.gp : look.gy)), 420);
+      go(room);
+    };
     return b;
   }));
+  if (look.on) placePins();
 }
 
 /* Input: wheel, swipe, keys, pointer look-around */
@@ -448,6 +687,7 @@ $('back').onclick = up;
 let wheelSum = 0, wheelLock = 0;
 addEventListener('wheel', e => {
   if (embedded || $('plan').open) return;
+  if (document.body.classList.contains('three-on') && e.target.closest?.('.apt3d')) return; // the wheel zooms the model
   const now = performance.now();
   if (running || now < wheelLock) return;
   wheelSum += e.deltaY;
@@ -460,7 +700,8 @@ addEventListener('wheel', e => {
 let touchStart = null;
 addEventListener('touchstart', e => { touchStart = e.touches[0]; }, { passive: true });
 addEventListener('touchend', e => {
-  if (!touchStart || e.target.closest('.chips, .plan')) return;
+  // In a room a drag looks around and on the model it turns the model, so neither is a swipe to the next room.
+  if (!touchStart || e.target.closest('.chips, .plan, .apt3d') || look.on) return;
   const t = e.changedTouches[0], dx = t.clientX - touchStart.clientX, dy = t.clientY - touchStart.clientY;
   if (embedded && Math.abs(dy) > Math.abs(dx)) return;
   if (Math.hypot(dx, dy) > 60) step(Math.abs(dx) > Math.abs(dy) ? -Math.sign(dx) : -Math.sign(dy));
@@ -487,6 +728,7 @@ function tick() {
 }
 if (!reducedMotion && matchMedia('(pointer: fine)').matches) {
   addEventListener('pointermove', e => {
+    if (look.on) return;
     tx = (0.5 - e.clientX / innerWidth) * innerWidth * 0.018;
     ty = (0.5 - e.clientY / innerHeight) * innerHeight * 0.018;
     if (!raf) raf = requestAnimationFrame(tick);
@@ -522,10 +764,14 @@ function start() {
   if (NODES[hash]) current = target = hash;
   if (current !== 'tower') showStill(current);
   if (current === 'home') show3d(true);
+  if (inRoom(current)) firstPerson(true);
   renderDock();
   renderPins();
   if (current === 'tower') { highlightHouse(house); resumeAuto(); }
-  addEventListener('resize', () => { if (!running && current === 'tower') highlightHouse(house); });
+  addEventListener('resize', () => {
+    if (!running && current === 'tower') highlightHouse(house);
+    if (look.on) { lens(); kick(); }
+  });
   preload();
 }
 start();
