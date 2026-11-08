@@ -14,7 +14,7 @@
 <link rel="stylesheet" href="../style.css">
 <link rel="stylesheet" href="./opus.css">
 </head>
-<body data-node="tower">
+<body data-node="home">
 
 <main class="viewport" id="viewport">
   <div class="zoomer" id="zoomer">
@@ -29,6 +29,24 @@
   </div>
   <div class="shade" aria-hidden="true"></div>
 </main>
+
+<section class="apt3d" id="apt3d" aria-label="The residence in 3D">
+  <model-viewer id="model" src="./assets/model/residence.glb" alt="3D model of a furnished Opus One 3+1 residence"
+    camera-controls auto-rotate auto-rotate-delay="2500" rotation-per-second="9deg" interaction-prompt="none"
+    camera-orbit="90deg 55deg auto" min-camera-orbit="auto 5deg auto" max-camera-orbit="auto 80deg auto"
+    shadow-intensity="0.8" shadow-softness="0.9" environment-image="neutral" exposure="1.1" touch-action="none" loading="eager"></model-viewer>
+  <div class="spot-card" id="spotCard" hidden>
+    <div class="spot-text">
+      <span class="caption-kicker">In this residence</span>
+      <strong class="caption-title" id="spotTitle"></strong>
+      <small id="spotSpecs"></small>
+    </div>
+    <button class="chip spot-go" id="spotGo" type="button">See the room →</button>
+    <button class="plan-close" id="spotClose" type="button" aria-label="Back to the whole residence">
+      <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+    </button>
+  </div>
+</section>
 
 <header class="top">
   <a class="brand" href="#tower" aria-label="Opus One, back to the towers">
@@ -74,6 +92,7 @@
 <div class="progress" id="progress" aria-hidden="true"><i></i></div>
 <noscript><p class="nojs">This virtual tour needs JavaScript.</p></noscript>
 
+<script type="module" src="https://cdn.jsdelivr.net/npm/@google/model-viewer@4.1.0/dist/model-viewer.min.js"></script>
 <script type="module" src="./tour.js"></script>
 </body>
 </html>

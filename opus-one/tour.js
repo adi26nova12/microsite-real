@@ -21,24 +21,27 @@ const HOUSES = [
     { label: 'Unit 2', plan: 'miralia-5b', carpet: 3533, superA: 6041 }] },
 ];
 
+// `home` is the residence as a 3D model; the tour starts there. The rooms open from it as full photographs.
 const NODES = {
   tower:   { title: 'Select a House', still: 'tower' },
-  lobby:   { title: 'Grand Arrival Lobby', chip: 'Lobby', still: 'lobby', parent: 'tower', specs: 'Double-height timber, marble and light' },
-  lift:    { title: 'Lift Lobby', still: 'lift', parent: 'lobby', specs: 'Swipe-card access to lobby & lifts' },
-  foyer:   { title: 'Entrance Foyer', chip: 'Foyer', still: 'foyer', parent: 'lift', specs: 'Italian marble flooring' },
-  living:  { title: 'Lounge', chip: 'Living', still: 'living', parent: 'foyer', specs: 'Italian marble · home automation' },
-  dining:  { title: 'Dining', chip: 'Dining', still: 'dining', parent: 'living', specs: 'Italian marble flooring' },
-  bedroom: { title: 'Master Bedroom', chip: 'Bedroom', still: 'bedroom', parent: 'living', specs: 'Laminate wood & Italian marble' },
+  home:    { title: 'Your residence in 3D', chip: '3D view', still: 'lobby', parent: 'tower' },
+  foyer:   { title: 'Entrance Foyer', chip: 'Foyer', still: 'foyer', parent: 'home', specs: 'Italian marble flooring' },
+  living:  { title: 'Lounge', chip: 'Living', still: 'living', parent: 'home', specs: 'Italian marble · home automation' },
+  dining:  { title: 'Dining', chip: 'Dining', still: 'dining', parent: 'home', specs: 'Italian marble flooring' },
+  bedroom: { title: 'Master Bedroom', chip: 'Bedroom', still: 'bedroom', parent: 'home', specs: 'Laminate wood & Italian marble' },
   bath:    { title: 'Master Bath', chip: 'Bath', still: 'bath', parent: 'bedroom', specs: 'Hansgrohe / TOTO · Duravit' },
 };
-const ROOMS = ['lobby', 'foyer', 'living', 'dining', 'bedroom', 'bath'];
-const ORDER = ['tower', 'lobby', 'lift', 'foyer', 'living', 'dining', 'bedroom', 'bath'];
+const ROOMS = ['home', 'foyer', 'living', 'dining', 'bedroom', 'bath'];
+const ORDER = ['tower', 'home', 'foyer', 'living', 'dining', 'bedroom', 'bath'];
 
 // Each edge is one move. An edge with a frame sequence is a real camera move (played backwards to return); the rest walk from still to still.
 const EDGES = [
-  ['tower', 'lobby', { seq: 'entrance', frames: 79, fps: 24 }],
-  ['lobby', 'lift'],
-  ['lift', 'foyer'],
+  ['tower', 'home', { seq: 'entrance', frames: 79, fps: 24 }],
+  ['home', 'foyer'],
+  ['home', 'living'],
+  ['home', 'dining'],
+  ['home', 'bedroom'],
+  ['home', 'bath'],
   ['foyer', 'living'],
   ['living', 'dining'],
   ['living', 'bedroom'],
@@ -47,14 +50,24 @@ const EDGES = [
 
 // Labelled pins that lead on from each room (% of the stage).
 const PINS = {
-  lobby: [['lift', 66, 48]],
-  lift: [['foyer', 78, 44], ['lobby', 13, 82]],
-  foyer: [['living', 30, 50], ['lift', 13, 84]],
+  foyer: [['living', 30, 50]],
   living: [['dining', 16, 70], ['bedroom', 86, 46], ['foyer', 50, 86]],
   dining: [['living', 86, 52]],
   bedroom: [['bath', 9, 44], ['living', 86, 84]],
   bath: [['bedroom', 84, 48]],
 };
+
+// Rooms on the 3D model: points on its surface (metres in model space), picked from a top-down view of assets/model/residence.glb.
+const MODEL = { plan: 'evalia-3', layout: '3+1 BHK · Evalia & Cecilia layout' };
+const SPOTS = [
+  { room: 'living', label: 'Lounge', at: [-0.222, 0.014, 0.158] },
+  { room: 'dining', label: 'Dining', at: [0.046, 0.047, 0.02] },
+  { room: 'bedroom', label: 'Master Bedroom', at: [-0.226, -0.019, 0.37] },
+  { room: 'bath', label: 'Master Bath', at: [-0.289, -0.045, 0.008] },
+  { room: 'foyer', label: 'Entrance Foyer', at: [0.31, -0.045, 0.264] },
+  { room: null, label: 'Kitchen', at: [0.23, -0.045, 0.067], specs: 'Italian marble counters · Häfele fittings' },
+  { room: null, label: 'Balcony', at: [-0.453, -0.011, 0.053], specs: 'Glass railing · anti-skid tiles' },
+];
 
 /* Engine */
 const $ = id => document.getElementById(id);
@@ -69,10 +82,10 @@ const params = new URLSearchParams(location.search);
 const guest = (params.get('for') || '').trim().slice(0, 40);
 const embedded = params.has('embed');
 
-const stillUrl = name => `assets/stills/${name}.webp`;
+const stillUrl = name => `assets/stills/${NODES[name]?.still ?? name}.webp`;
 const edgeOf = (a, b) => EDGES.find(e => (e[0] === a && e[1] === b) || (e[0] === b && e[1] === a));
 
-let current = 'tower', target = 'tower', running = false, house = 3;
+let current = 'home', target = 'home', running = false, house = 1;
 
 function route(from, to) {
   const prev = { [from]: null }, queue = [from];
@@ -175,14 +188,78 @@ async function walk(to, forward, rate) {
 async function move(from, to, rate) {
   const edge = edgeOf(from, to), forward = ORDER.indexOf(to) > ORDER.indexOf(from);
   const seq = edge?.[2];
+  // Between the 3D model and a room, the photograph is set beneath the model and the model fades away (or back).
+  if (from === 'home' && to !== 'tower') { await showStill(to); return show3d(false); }
+  if (to === 'home' && from !== 'tower') { await show3d(true); return showStill(to); }
+  if (from === 'home') await show3d(false);
   if (seq && !reducedMotion && await playSequence(seq, edge[0] !== from, rate)) {
     await showStill(to);
+    if (to === 'home') await show3d(true);
     seqEl.classList.remove('on');
     await sleep(240);
     return;
   }
-  return walk(to, forward, rate);
+  await walk(to, forward, rate);
+  if (to === 'home') await show3d(true);
 }
+
+/* The residence in 3D */
+const model = $('model');
+const HOME_ORBIT = '90deg 55deg auto'; // from the entrance side, balcony and bedrooms at the back
+// Coming back to the model always shows the whole residence again, not the room last zoomed into.
+async function show3d(on) {
+  if (on) resetView();
+  else closeSpot();
+  document.body.classList.toggle('three-on', on);
+  model.autoRotate = on && !reducedMotion;
+  await sleep(420);
+}
+
+function placeSpots() {
+  model.querySelectorAll('.spot').forEach(b => b.remove());
+  SPOTS.forEach((s, i) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = s.room ? 'spot' : 'spot info';
+    b.slot = `hotspot-${i}`;
+    b.dataset.position = s.at.map(v => v + 'm').join(' ');
+    b.dataset.normal = '0m 1m 0m';
+    b.textContent = s.label;
+    b.onclick = e => { e.stopPropagation(); openSpot(i); };
+    model.append(b);
+  });
+}
+
+// Fly the camera down to a room and offer its photograph.
+function openSpot(i) {
+  const s = SPOTS[i], b = model.querySelector(`[slot="hotspot-${i}"]`), size = model.getDimensions();
+  model.autoRotate = false;
+  model.cameraTarget = b.dataset.position;
+  model.cameraOrbit = `${model.getCameraOrbit().theta}rad 45deg ${Math.max(size.x, size.z) * 0.6}m`;
+  model.querySelectorAll('.spot.on').forEach(x => x.classList.remove('on'));
+  b.classList.add('on');
+  $('spotTitle').textContent = s.label;
+  $('spotSpecs').textContent = s.specs || NODES[s.room].specs || '';
+  $('spotGo').hidden = !s.room;
+  $('spotGo').onclick = () => go(s.room);
+  $('spotCard').hidden = false;
+}
+function closeSpot() {
+  $('spotCard').hidden = true;
+  model.querySelectorAll('.spot.on').forEach(x => x.classList.remove('on'));
+}
+function resetView() {
+  closeSpot();
+  model.cameraTarget = 'auto auto auto';
+  // A tall phone screen gets a closer, steeper view so the residence fills it.
+  model.cameraOrbit = innerWidth < innerHeight ? '90deg 60deg 1.8m' : HOME_ORBIT;
+  model.resetTurntableRotation?.();
+  model.autoRotate = !reducedMotion;
+}
+$('spotClose').onclick = resetView;
+model.addEventListener('load', placeSpots);
+// In a microsite, vertical swipes over the model still scroll the page around it.
+if (embedded) model.setAttribute('touch-action', 'pan-y');
 
 async function run() {
   if (running) return;
@@ -218,11 +295,15 @@ function renderDock() {
   document.body.dataset.node = target;
   $('title').textContent = node.title;
   $('kicker').textContent = `${h.name} · ${h.type}`;
-  $('specs').textContent = target === 'tower' ? `From ${sqft(fromSuper(h))} super area` : node.specs || '';
+  $('specs').textContent = target === 'tower' ? `From ${sqft(fromSuper(h))} super area`
+    : target === 'home' ? (h.units.some(u => u.plan === MODEL.plan) ? 'Drag to turn · pinch to zoom · tap a room' : `Shown: ${MODEL.layout}`)
+    : node.specs || '';
 
   const chips = $('chips');
   if (target === 'tower') {
-    chips.replaceChildren(stepChip(-1), chip(`Enter ${h.name.replace(' House', '')}`, 'lobby', true), stepChip(1), planChip());
+    chips.replaceChildren(stepChip(-1), chip(`Enter ${h.name.replace(' House', '')}`, 'home', true), stepChip(1), planChip());
+  } else if (target === 'home') {
+    chips.replaceChildren(chip('Building', 'tower'), ...ROOMS.map(r => chip(NODES[r].chip, r, r === target)), planChip());
   } else {
     chips.replaceChildren(...ROOMS.map(r => chip(NODES[r].chip, r, r === target)), planChip());
   }
@@ -303,9 +384,9 @@ function buildHouses() {
     if (!e.target.dataset.house) return;
     highlightHouse(+e.target.dataset.house);
     pauseAuto();
-    if (e.pointerType !== 'touch') go('lobby');
+    if (e.pointerType !== 'touch') go('home');
   });
-  tipEl.addEventListener('click', () => go('lobby'));
+  tipEl.addEventListener('click', () => go('home'));
 }
 
 function highlightHouse(i) {
@@ -438,10 +519,9 @@ function start() {
   personalise();
   buildHouses();
   const hash = location.hash.slice(1);
-  if (NODES[hash] && hash !== 'tower') {
-    current = target = hash;
-    showStill(hash);
-  }
+  if (NODES[hash]) current = target = hash;
+  if (current !== 'tower') showStill(current);
+  if (current === 'home') show3d(true);
   renderDock();
   renderPins();
   if (current === 'tower') { highlightHouse(house); resumeAuto(); }
