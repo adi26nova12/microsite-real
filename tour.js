@@ -165,7 +165,7 @@ const view = { drag: null, vy: 0, vp: 0, gyro: null, gy: 0, gp: 0, idle: true, r
 const ease = t => t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
 const wrap = a => ((a + 540) % 360) - 180;
 // The resting field of view: wide like standing in the room (across on a landscape screen, top to bottom on a tall one).
-const baseFov = () => innerWidth >= innerHeight ? 90 : 85;
+const baseFov = () => innerWidth >= innerHeight ? 112 : 100; // wide enough to take in the room, like standing in it
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const nextFrame = () => new Promise(r => { requestAnimationFrame(r); setTimeout(r, 60); });
 
@@ -338,7 +338,7 @@ if (pano) {
   panoEl.addEventListener('wheel', e => {
     if (embedded && !e.ctrlKey) return;
     e.preventDefault();
-    pano.fov = Math.max(35, Math.min(110, pano.fov + e.deltaY * (e.ctrlKey ? 0.2 : 0.04)));
+    pano.fov = Math.max(35, Math.min(125, pano.fov + e.deltaY * (e.ctrlKey ? 0.2 : 0.04)));
     view.idle = false;
   }, { passive: false });
   // Two-finger pinch on a phone.
@@ -349,7 +349,7 @@ if (pano) {
   panoEl.addEventListener('touchmove', e => {
     if (!pinch || e.touches.length !== 2) return;
     const d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-    pano.fov = Math.max(35, Math.min(110, pinch.fov * pinch.d / d));
+    pano.fov = Math.max(35, Math.min(125, pinch.fov * pinch.d / d));
   }, { passive: true });
   panoEl.addEventListener('touchend', e => { if (e.touches.length < 2) pinch = null; }, { passive: true });
 }
