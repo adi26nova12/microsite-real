@@ -159,3 +159,25 @@ body[data-node="tower"] .dock { padding-left: 14px; }
 @media (prefers-reduced-motion: reduce) {
   .pin::before { animation: none; }
 }
+
+/* 360° rooms: the panorama sits over the photographs, under the header and dock. */
+.pano-wrap { position: fixed; inset: 0; z-index: 1; opacity: 0; pointer-events: none; transition: opacity 500ms var(--ease); }
+.pano-wrap::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: linear-gradient(180deg, rgba(10, 16, 48, .45) 0, transparent 14%, transparent 80%, rgba(10, 16, 48, .55) 100%); }
+body.pano-on .pano-wrap { opacity: 1; pointer-events: auto; }
+.pano { display: block; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+body.looking .pano { cursor: grabbing; }
+.doors { position: fixed; inset: 0; z-index: 2; pointer-events: none; transition: opacity 300ms var(--ease); }
+body.moving .doors, body:not(.pano-on) .doors { opacity: 0; }
+.doors .pin { pointer-events: auto; }
+body:not(.pano-on) .doors .pin { pointer-events: none; }
+.pin.edge-l::before, .pin.edge-r::before { content: "‹"; width: auto; height: auto; background: none; box-shadow: none; animation: none; color: var(--brass); font-size: 17px; line-height: 1; }
+.pin.edge-r { flex-direction: row-reverse; padding: 0 9px 0 12px; }
+.pin.edge-r::before { content: "›"; }
+.look-hint {
+  position: fixed; z-index: 2; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  display: flex; align-items: center; gap: 10px; padding: 10px 16px; pointer-events: none;
+  background: var(--ink-soft); border: 1px solid var(--line); border-radius: 99px;
+  -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px); font-size: 13px; white-space: nowrap;
+}
+.look-hint::before { content: "360°"; color: var(--brass); font-size: 12px; font-weight: 600; }
+.look-hint[hidden] { display: none; }
