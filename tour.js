@@ -141,10 +141,10 @@ async function move(from, to, rate) {
   // Rooms are 360° panoramas: room to room is a walk through the doorway, and the floor plan fades into (or out of) a room.
   if (pano && PANOS[from] && PANOS[to]) return walkThrough(from, to, rate);
   if (pano && PANOS[to]) return enterRoom(to);
-  if (pano && PANOS[from]) return leaveRoom(to);
-  // Tower to floor plan: a quick dip between the two sharp photographs. (The camera-move clips are only a fallback
-  // without WebGL: at 1280 wide they look soft on a big screen.)
-  if (pano) return dipTo(to, rate);
+  if (pano && PANOS[from]) return leaveRoom(from, to);
+  // Tower and floor plan: the camera flies between the two sharp photographs. (The camera-move clips are only a
+  // fallback without WebGL: at 1280 wide they look soft on a big screen.)
+  if (pano) return reducedMotion ? dipTo(to, rate) : flyStill(to, stillOrigin('plan'), to === 'plan', rate);
   if (reducedMotion) return crossfade(to);
   player = 1 - player;
   const video = players[player], url = clipUrl(from, to);
@@ -189,6 +189,43 @@ async function dipTo(to, rate = 1) {
   await dip(true, 260 / rate);
   await showStill(to);
   await dip(false, 340 / rate);
+}
+
+/* Smooth moves. The camera is always moving while one scene gives way to the next, and the two overlap only for a
+   moment mid-move, so it reads as travelling rather than as a blurry double image. Each scene comes to rest sharp. */
+const easeIn = t => t * t * t;
+const easeOut = t => 1 - (1 - t) ** 3;
+const wrapEl = document.querySelector('.pano-wrap');
+// Web Animations, with a timer behind each so a hidden tab cannot stall the tour.
+function play(el, frames, opts) {
+  const a = el.animate(frames, { fill: 'forwards', ...opts });
+  return Promise.race([a.finished.catch(() => {}), sleep(opts.duration + 150)]).then(() => a);
+}
+// Where on the photograph (in % of the stage) a move heads: the chosen floor on the tower, or a room on the plan.
+function stillOrigin(node) {
+  if (node === 'plan') { const { top, h } = floorY(floor); return [(FLOOR_RANGE.left + FLOOR_RANGE.right) / 2, top + h / 2]; }
+  const pts = ZONES[node]?.split(' ').map(p => p.split(',').map(Number));
+  if (!pts) return [50, 50];
+  return [pts.reduce((a, p) => a + p[0], 0) / pts.length / 11, pts.reduce((a, p) => a + p[1], 0) / pts.length / 6.22];
+}
+// Fly into the floor from the tower (inward), or pull back out of it to the tower.
+async function flyStill(to, [ox, oy], inward, rate = 1) {
+  const D = 1000 / rate;
+  const ghost = still.cloneNode();
+  ghost.removeAttribute('id');
+  ghost.alt = '';
+  ghost.style.transformOrigin = `${ox}% ${oy}%`;
+  still.after(ghost);
+  await showStill(to);
+  still.style.transformOrigin = inward ? '50% 50%' : `${ox}% ${oy}%`;
+  const [g, n] = await Promise.all(inward
+    ? [play(ghost, [{ transform: 'scale(1)', opacity: 1 }, { transform: 'scale(2)', opacity: 1, offset: 0.6 }, { transform: 'scale(2.6)', opacity: 0 }], { duration: D * 0.85, easing: 'cubic-bezier(.45,0,.75,.75)' }),
+       play(still, [{ transform: 'scale(1.3)' }, { transform: 'scale(1.3)', offset: 0.5 }, { transform: 'scale(1)' }], { duration: D, easing: 'cubic-bezier(.3,.6,.25,1)' })]
+    : [play(ghost, [{ transform: 'scale(1)', opacity: 1 }, { transform: 'scale(.88)', opacity: 1, offset: 0.35 }, { transform: 'scale(.8)', opacity: 0 }], { duration: D * 0.6, easing: 'ease-in' }),
+       play(still, [{ transform: 'scale(2.4)' }, { transform: 'scale(1)' }], { duration: D, easing: 'cubic-bezier(.2,.65,.25,1)' })]);
+  ghost.remove();
+  n.cancel();
+  g.cancel();
 }
 
 function setPano(on) {
@@ -268,30 +305,57 @@ async function turnTo(yaw, pitch, ms) {
 
 async function enterRoom(to, instant = false) {
   const img = pano.load(panoUrl(to));
-  await dip(true, instant ? 0 : 260);
+  if (instant || reducedMotion) await dip(true, instant ? 0 : 260);
   await img.catch(() => {});
   await pano.show(panoUrl(to), 0);
   view.gyro = null; view.gy = view.gp = 0;
-  // Arrive a step inside the doorway and settle back: at most a few degrees, so the room stays sharp.
-  const settle = reducedMotion ? 0 : 6;
-  pano.yaw = PANOS[to].look; pano.pitch = 0; pano.fov = baseFov() - settle;
+  pano.yaw = PANOS[to].look; pano.pitch = 0;
   view.idle = true;
+  if (instant || reducedMotion) {
+    pano.fov = baseFov();
+    setPano(true);
+    kick();
+    showHint();
+    return dip(false, 380);
+  }
+  // Zoom into the room on the floor plan; part way in, the room opens out around you and settles.
+  const D = 1150, [ox, oy] = stillOrigin(to), push = 28;
+  still.style.transformOrigin = `${ox}% ${oy}%`;
+  const zoom = play(still, [{ transform: 'scale(1)' }, { transform: 'scale(2.6)' }], { duration: D * 0.6, easing: 'cubic-bezier(.5,0,.8,.7)' });
+  await sleep(D * 0.38);
+  pano.fov = baseFov() - push;
+  const appear = play(wrapEl, [{ opacity: 0 }, { opacity: 1 }], { duration: D * 0.22, easing: 'linear' });
   setPano(true);
   kick();
+  await animate(D * 0.62, k => { pano.fov = baseFov() - push * (1 - easeOut(k)); });
+  (await appear).cancel();
+  (await zoom).cancel();
   showHint();
-  const lift = dip(false, 380);
-  await animate(380, k => { pano.fov = baseFov() - settle * (1 - ease(k)); });
-  await lift;
 }
 
-async function leaveRoom(to) {
-  await dip(true, 260);
+async function leaveRoom(from, to) {
+  if (reducedMotion) {
+    await dip(true, 260);
+    await showStill(to);
+    setPano(false);
+    return dip(false, 340);
+  }
+  // Step back out of the room: it falls away as the floor plan pulls back from that room to the whole floor.
   await showStill(to);
+  const D = 1000, [ox, oy] = stillOrigin(from), fov0 = pano.fov;
+  still.style.transformOrigin = `${ox}% ${oy}%`;
+  doorsEl.replaceChildren();
+  const settle = play(still, [{ transform: 'scale(2.4)' }, { transform: 'scale(1)' }], { duration: D, easing: 'cubic-bezier(.2,.65,.25,1)' });
+  const fade = play(wrapEl, [{ opacity: 1 }, { opacity: 1, offset: 0.3 }, { opacity: 0 }], { duration: D * 0.5, easing: 'linear' });
+  await animate(D * 0.5, k => { pano.fov = fov0 + (125 - fov0) * easeIn(k); });
+  await fade;
   setPano(false);
-  await dip(false, 340);
+  (await fade).cancel();
+  (await settle).cancel();
 }
 
-// Walking through a doorway: face it, step towards it as the screen dips, and arrive facing into the next room.
+// Walking through a doorway: face it, push through it, and the next room settles around you. The two rooms overlap
+// only for a moment at the fastest point of the push.
 async function walkThrough(from, to, rate) {
   view.idle = false;
   const door = PANOS[from].doors[to];
@@ -299,18 +363,23 @@ async function walkThrough(from, to, rate) {
   if (door && !reducedMotion) await turnTo(door[0], door[1] * 0.5, 380 / rate);
   await next;
   doorsEl.replaceChildren();
-  const fov0 = pano.fov, p0 = pano.pitch, step = reducedMotion ? 0 : 10;
-  const out = dip(true, 260 / rate);
-  await animate(260 / rate, k => { pano.fov = fov0 - step * ease(k); pano.pitch = p0 * (1 - ease(k)); });
-  await out;
   // Arrive facing the new room's own view: its panorama is turned so that view is straight ahead.
   pano.yawB = (PANOS[to].look - pano.yaw - view.gy) * Math.PI / 180;
+  if (reducedMotion) {
+    await dip(true, 260);
+    pano.swap();
+    await dip(false, 340);
+    view.idle = true;
+    return;
+  }
+  const D = 1200 / rate, base = baseFov(), fov0 = pano.fov, p0 = pano.pitch, low = Math.min(fov0, base) - 26;
+  await animate(D, k => {
+    if (k < 0.5) { const e = easeIn(k / 0.5); pano.fov = fov0 + (low - fov0) * e; pano.pitch = p0 * (1 - e); }
+    else { pano.fov = low + (base - low) * easeOut((k - 0.5) / 0.5); pano.pitch = 0; }
+    pano.mixB = Math.min(1, Math.max(0, (k - 0.4) / 0.2));
+  });
   pano.swap();
-  const land = reducedMotion ? 0 : 6;
-  pano.fov = baseFov() - land;
-  const lift = dip(false, 340 / rate);
-  await animate(340 / rate, k => { pano.fov = baseFov() - land * (1 - ease(k)); });
-  await lift;
+  pano.fov = base;
   view.idle = true;
 }
 
