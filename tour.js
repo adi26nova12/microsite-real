@@ -142,6 +142,9 @@ async function move(from, to, rate) {
   if (pano && PANOS[from] && PANOS[to]) return walkThrough(from, to, rate);
   if (pano && PANOS[to]) return enterRoom(to);
   if (pano && PANOS[from]) return leaveRoom(to);
+  // Tower to floor plan: a quick dip between the two sharp photographs. (The camera-move clips are only a fallback
+  // without WebGL: at 1280 wide they look soft on a big screen.)
+  if (pano) return dipTo(to, rate);
   if (reducedMotion) return crossfade(to);
   player = 1 - player;
   const video = players[player], url = clipUrl(from, to);
@@ -168,6 +171,25 @@ const wrap = a => ((a + 540) % 360) - 180;
 const baseFov = () => innerWidth >= innerHeight ? 112 : 100; // wide enough to take in the room, like standing in it
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const nextFrame = () => new Promise(r => { requestAnimationFrame(r); setTimeout(r, 60); });
+async function animate(ms, fn) {
+  const t0 = performance.now();
+  for (let k = 0; k < 1;) { await nextFrame(); k = Math.min(1, (performance.now() - t0) / ms); fn(k); }
+}
+
+// Every change of scene dips briefly to dark and swaps while it's dark, so two pictures are never shown blended
+// over each other (that reads as a blurry double image).
+const dipEl = $('dip');
+async function dip(dark, ms = 280) {
+  dipEl.style.transitionDuration = ms + 'ms';
+  dipEl.getBoundingClientRect();
+  dipEl.style.opacity = dark ? 1 : 0;
+  if (ms) await sleep(ms);
+}
+async function dipTo(to, rate = 1) {
+  await dip(true, 260 / rate);
+  await showStill(to);
+  await dip(false, 340 / rate);
+}
 
 function setPano(on) {
   document.body.classList.toggle('pano-on', on);
@@ -244,51 +266,51 @@ async function turnTo(yaw, pitch, ms) {
   }
 }
 
-async function enterRoom(to) {
+async function enterRoom(to, instant = false) {
+  const img = pano.load(panoUrl(to));
+  await dip(true, instant ? 0 : 260);
+  await img.catch(() => {});
   await pano.show(panoUrl(to), 0);
   view.gyro = null; view.gy = view.gp = 0;
-  pano.yaw = PANOS[to].look; pano.pitch = 0; pano.fov = baseFov() - (reducedMotion ? 0 : 22);
+  // Arrive a step inside the doorway and settle back: at most a few degrees, so the room stays sharp.
+  const settle = reducedMotion ? 0 : 6;
+  pano.yaw = PANOS[to].look; pano.pitch = 0; pano.fov = baseFov() - settle;
   view.idle = true;
   setPano(true);
   kick();
   showHint();
-  if (reducedMotion) return sleep(450);
-  const t0 = performance.now();
-  for (let k = 0; k < 1;) {
-    await nextFrame();
-    k = Math.min(1, (performance.now() - t0) / 900);
-    pano.fov = baseFov() - 22 * (1 - ease(k));
-  }
+  const lift = dip(false, 380);
+  await animate(380, k => { pano.fov = baseFov() - settle * (1 - ease(k)); });
+  await lift;
 }
 
 async function leaveRoom(to) {
+  await dip(true, 260);
   await showStill(to);
   setPano(false);
-  await sleep(500);
+  await dip(false, 340);
 }
 
-// Walking through a doorway: face it, step forward into it while the next room fades in around you, and settle.
+// Walking through a doorway: face it, step towards it as the screen dips, and arrive facing into the next room.
 async function walkThrough(from, to, rate) {
   view.idle = false;
   const door = PANOS[from].doors[to];
   const next = pano.stage(panoUrl(to), 0);
-  if (door && !reducedMotion) await turnTo(door[0], door[1] * 0.5, 420 / rate);
+  if (door && !reducedMotion) await turnTo(door[0], door[1] * 0.5, 380 / rate);
   await next;
+  doorsEl.replaceChildren();
+  const fov0 = pano.fov, p0 = pano.pitch, step = reducedMotion ? 0 : 10;
+  const out = dip(true, 260 / rate);
+  await animate(260 / rate, k => { pano.fov = fov0 - step * ease(k); pano.pitch = p0 * (1 - ease(k)); });
+  await out;
   // Arrive facing the new room's own view: its panorama is turned so that view is straight ahead.
   pano.yawB = (PANOS[to].look - pano.yaw - view.gy) * Math.PI / 180;
-  doorsEl.replaceChildren();
-  const ms = reducedMotion ? 400 : 1100 / rate, t0 = performance.now(), fov0 = pano.fov, p0 = pano.pitch;
-  for (let k = 0; k < 1;) {
-    await nextFrame();
-    k = Math.min(1, (performance.now() - t0) / ms);
-    if (!reducedMotion) {
-      pano.fov = fov0 - 22 * Math.sin(Math.PI * k) + (baseFov() - fov0) * k;
-      pano.pitch = p0 * (1 - ease(k));
-    }
-    pano.mixB = Math.min(1, Math.max(0, (k - 0.25) / 0.5));
-  }
   pano.swap();
-  pano.fov = baseFov();
+  const land = reducedMotion ? 0 : 6;
+  pano.fov = baseFov() - land;
+  const lift = dip(false, 340 / rate);
+  await animate(340 / rate, k => { pano.fov = baseFov() - land * (1 - ease(k)); });
+  await lift;
   view.idle = true;
 }
 
@@ -607,8 +629,8 @@ if (!reducedMotion && matchMedia('(pointer: fine)').matches) {
 async function preload() {
   Object.values(NODES).forEach(n => { new Image().src = stillUrl(n.still); });
   if (pano) Object.keys(PANOS).forEach(r => pano.load(panoUrl(r)).catch(() => {}));
-  // With 360° rooms, only the moves outside the residence (tower to floor plan) are still clips.
-  const clipEdges = EDGES.filter(([a, b]) => !(pano && (PANOS[a] || PANOS[b])));
+  // With 360° rooms nothing plays a clip any more: the clips are only the fallback without WebGL.
+  const clipEdges = pano ? [] : EDGES;
   const queue = [...clipEdges.map(([a, b]) => clipUrl(a, b)), ...clipEdges.map(([a, b]) => clipUrl(b, a))];
   const bar = $('progress'), total = queue.length;
   let done = 0;
@@ -619,7 +641,7 @@ async function preload() {
         const res = await fetch(url);
         if (res.ok) blobs.set(url, URL.createObjectURL(await res.blob()));
       } catch {}
-      bar.style.setProperty('--p', ++done / total);
+      bar.style.setProperty('--p', ++done / Math.max(1, total));
     }
   };
   await Promise.all([worker(), worker(), worker()]);
@@ -646,7 +668,7 @@ function start() {
   if (NODES[hash] && hash !== 'tower') {
     current = target = hash;
     showStill(PANOS[hash] && pano ? 'plan' : hash);
-    if (pano && PANOS[hash]) enterRoom(hash).then(renderPins);
+    if (pano && PANOS[hash]) enterRoom(hash, true).then(renderPins);
   }
   renderDock();
   renderPins();
