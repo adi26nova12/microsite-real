@@ -138,7 +138,9 @@ async function crossfade(to) {
 
 // The clip fades in over the resting still, and the next still is swapped in beneath its last frame.
 async function move(from, to, rate) {
-  // Rooms are 360° panoramas: room to room is a walk through the doorway, and the floor plan fades into (or out of) a room.
+  // Rooms are 360° panoramas: choosing a floor goes in through the residence's front door, room to room is a walk
+  // through the doorway, and leaving pulls back out to the tower.
+  if (pano && from === 'tower' && PANOS[to]) return arrive(to);
   if (pano && PANOS[from] && PANOS[to]) return walkThrough(from, to, rate);
   if (pano && PANOS[to]) return enterRoom(to);
   if (pano && PANOS[from]) return leaveRoom(from, to);
@@ -340,9 +342,9 @@ async function leaveRoom(from, to) {
     setPano(false);
     return dip(false, 340);
   }
-  // Step back out of the room: it falls away as the floor plan pulls back from that room to the whole floor.
+  // Step back out of the room: it falls away as the camera pulls back from the floor to the whole tower.
   await showStill(to);
-  const D = 1000, [ox, oy] = stillOrigin(from), fov0 = pano.fov;
+  const D = 1000, [ox, oy] = stillOrigin(to === 'tower' ? 'plan' : from), fov0 = pano.fov;
   still.style.transformOrigin = `${ox}% ${oy}%`;
   doorsEl.replaceChildren();
   const settle = play(still, [{ transform: 'scale(2.4)' }, { transform: 'scale(1)' }], { duration: D, easing: 'cubic-bezier(.2,.65,.25,1)' });
@@ -352,6 +354,104 @@ async function leaveRoom(from, to) {
   setPano(false);
   (await fade).cancel();
   (await settle).cancel();
+}
+
+// Arriving on a floor: the camera pushes in on that floor of the tower, comes to rest at the residence's front door,
+// the doors swing open onto the living room, and you walk through into it.
+// The front door photographs (wide for landscape screens, tall for phones held upright): image size in pixels and the
+// doorway inside the brass frame as [left, top, right, bottom], also in pixels.
+const ENTRY = {
+  wide: { size: [2688, 1520], door: [877, 220, 1813, 1343] },
+  tall: { size: [1520, 2688], door: [271, 806, 1250, 1976] },
+};
+const entryEl = $('entry'), entryScene = $('entryScene'), entryPhoto = $('entryPhoto'), entryFrame = $('entryFrame');
+const spillEl = $('entrySpill'), leaves = entryEl.querySelectorAll('.leaf');
+function setEntry() {
+  const name = innerWidth / innerHeight < 0.9 ? 'tall' : 'wide', { size: [w, h], door: [l, t, r, b] } = ENTRY[name];
+  const src = `assets/entry/${name}`;
+  if (!$('entryWall').src.endsWith(src + '.webp')) {
+    $('entryWall').src = src + '.webp';
+    leaves[0].src = src + '-l.webp';
+    leaves[1].src = src + '-r.webp';
+  }
+  const st = entryPhoto.style;
+  st.setProperty('--ar', w / h);
+  st.setProperty('--dl', l / w * 100 + '%');
+  st.setProperty('--dt', t / h * 100 + '%');
+  st.setProperty('--dw', (r - l) / w * 100 + '%');
+  st.setProperty('--dh', (b - t) / h * 100 + '%');
+}
+// Load the photographs before they're needed, so the door is never drawn half-loaded.
+function preloadEntry() {
+  setEntry();
+  return Promise.all([$('entryWall'), ...leaves].map(i => i.decode().catch(() => {})));
+}
+
+async function arrive(to) {
+  const ready = pano.load(panoUrl(to)).catch(() => {});
+  const doorReady = preloadEntry();
+  document.body.classList.add('arriving');
+  const settleRoom = async fov => {
+    await ready;
+    await pano.show(panoUrl(to), 0);
+    view.gyro = null; view.gy = view.gp = 0; view.vy = view.vp = 0;
+    pano.yaw = PANOS[to].look; pano.pitch = 0; pano.fov = fov;
+    view.idle = true;
+  };
+  const showRoom = () => { setPano(true); kick(); };
+  if (reducedMotion) {
+    await dip(true, 260);
+    await settleRoom(baseFov());
+    showRoom();
+    document.body.classList.remove('arriving');
+    showHint();
+    return dip(false, 380);
+  }
+  // 1. Push in on the floor. Equal steps in scale read as a steady speed, so the zoom has no lurch.
+  const [ox, oy] = stillOrigin('plan'), ZOOM = 1150;
+  still.style.transformOrigin = `${ox}% ${oy}%`;
+  still.style.willChange = 'transform';
+  const zoom = play(still, [0, 1, 2, 3, 4, 5, 6].map(i => ({ transform: `scale(${(5.5 ** (i / 6)).toFixed(3)})` })), { duration: ZOOM, easing: 'cubic-bezier(.55,0,.8,.55)' });
+  await Promise.all([doorReady, sleep(ZOOM * 0.66)]);
+  // 2. ...still moving, arrive at the residence's front door and come to a stop in front of it.
+  leaves.forEach(l => { l.style.transform = ''; });
+  entryEl.classList.add('on');
+  entryScene.style.transform = 'none';
+  const fr = entryFrame.getBoundingClientRect();
+  entryScene.style.transform = '';
+  entryScene.style.transformOrigin = `${fr.left + fr.width / 2}px ${fr.top + fr.height / 2}px`;
+  entryFrame.style.perspective = fr.height * 2.2 + 'px';
+  $('plaque').textContent = `${floor}A`;
+  $('plaque').style.fontSize = fr.height * 0.07 + 'px';
+  const near = 1.14;
+  const approach = play(entryScene, [{ transform: 'scale(1)' }, { transform: `scale(${near})` }], { duration: 1000, easing: 'cubic-bezier(.12,.62,.3,1)' });
+  const appear = play(entryEl, [{ opacity: 0 }, { opacity: 1 }], { duration: ZOOM * 0.34, easing: 'linear' });
+  await settleRoom(124);
+  await appear;
+  showRoom(); // behind the closed doors, so nothing shows yet
+  (await zoom).cancel();
+  still.style.willChange = '';
+  await approach;
+  await sleep(220);
+  // 3. The doors swing open, and warm light falls out across the floor...
+  const OPEN = 1150, swing = { duration: OPEN, easing: 'cubic-bezier(.5,0,.2,1)' };
+  const opened = Promise.all([
+    play(leaves[0], [{ transform: 'rotateY(0deg)', filter: 'brightness(1)' }, { transform: 'rotateY(100deg)', filter: 'brightness(.45)' }], swing),
+    play(leaves[1], [{ transform: 'rotateY(0deg)', filter: 'brightness(1)' }, { transform: 'rotateY(-100deg)', filter: 'brightness(.45)' }], swing),
+    play(spillEl, [{ opacity: 0 }, { opacity: 1 }], { duration: OPEN * 0.8, easing: 'ease-out' }),
+  ]);
+  await sleep(OPEN * 0.5);
+  // 4. ...and you walk through the doorway into the living room, which settles around you.
+  const WALK = 1400, cover = Math.max(innerWidth / fr.width, innerHeight / fr.height) * 1.4;
+  const walk = play(entryScene, [{ transform: `scale(${near})` }, { transform: `scale(${(near * cover) ** 0.5})`, offset: 0.6 }, { transform: `scale(${cover})` }], { duration: WALK, easing: 'cubic-bezier(.45,0,.7,1)' });
+  const leave = play(entryEl, [{ opacity: 1 }, { opacity: 1, offset: 0.72 }, { opacity: 0 }], { duration: WALK, easing: 'linear' });
+  const fov0 = pano.fov, base = baseFov();
+  await animate(WALK + 350, k => { pano.fov = fov0 + (base - fov0) * easeOut(k); });
+  await Promise.all([walk, leave, opened]);
+  entryEl.classList.remove('on');
+  for (const a of entryEl.getAnimations({ subtree: true })) a.cancel();
+  document.body.classList.remove('arriving');
+  showHint();
 }
 
 // Walking through a doorway: face it, push through it, and the next room settles around you. The two rooms overlap
@@ -487,10 +587,13 @@ async function run() {
   }
   let walking = false; // a walk through several rooms keeps one brisker pace from start to finish
   while (current !== target) {
-    const path = route(current, target);
-    walking = walking || path.length > 1;
-    await move(current, path[0], walking ? 1.5 : 1);
-    current = path[0];
+    // With 360° rooms there's no stop at the floor plan: a floor is entered at its front door, which opens onto the
+    // living room, and leaving any room goes straight back out to the tower.
+    const next = pano && current === 'tower' ? 'living' : pano && target === 'tower' ? 'tower' : route(current, target)[0];
+    walking = walking || next !== target;
+    await move(current, next, walking && current !== 'tower' ? 1.5 : 1);
+    current = next;
+    if (pano) markMinimap(current);
   }
   running = false;
   document.body.classList.remove('moving');
@@ -500,6 +603,7 @@ async function run() {
 }
 
 function go(node, push = true) {
+  if (pano && node === 'plan') node = 'living'; // the floor plan is the minimap now; "enter the floor" goes in the front door
   if (!NODES[node] || node === target) return;
   target = node;
   if (push) history[embedded ? 'replaceState' : 'pushState'](null, '', '#' + node);
@@ -519,19 +623,112 @@ function renderDock() {
   if (target === 'tower') {
     chips.replaceChildren(chip(`Tour floor ${floor}`, 'plan', true));
   } else {
-    chips.replaceChildren(chip('Floor', 'plan', target === 'plan'), ...ROOMS.map(r => chip(NODES[r].title.split(' ').pop() === 'Dining' ? 'Kitchen' : NODES[r].title.split(' ').pop(), r, r === target)));
+    chips.replaceChildren(...(pano ? [] : [chip('Floor', 'plan', target === 'plan')]), ...ROOMS.map(r => chip(shortName(r), r, r === target)));
   }
+  $('mmFloor').textContent = `Floor ${floor}`;
 
   if (target === 'tower') return $('crumbs').replaceChildren();
-  const crumbs = [['tower', 'Tower'], ['plan', `Floor ${floor}`]];
+  const crumbs = [['tower', 'Tower'], [pano ? null : 'plan', `Floor ${floor}`]];
   if (ROOMS.includes(target)) crumbs.push([target, NODES[target].title]);
   $('crumbs').replaceChildren(...crumbs.flatMap(([n, label], i) => {
-    const last = i === crumbs.length - 1;
-    const el = document.createElement(last ? 'span' : 'button');
+    const link = i < crumbs.length - 1 && n;
+    const el = document.createElement(link ? 'button' : 'span');
     el.textContent = label;
-    if (!last) { el.type = 'button'; el.onclick = () => go(n); }
+    if (link) { el.type = 'button'; el.onclick = () => go(n); }
     return i ? [Object.assign(document.createElement('span'), { textContent: '/', ariaHidden: 'true' }), el] : [el];
   }));
+}
+
+const shortName = r => ({ kitchen: 'Kitchen', bedroom: 'Bedroom', bath: 'Bath' })[r] || NODES[r].title;
+
+/* Minimap: the residence's floor plan, drawn like an architect's plan, in the corner while you're inside.
+   Units are tenths of a foot; x runs along the window wall (y = 0, facing the water), y runs back to the entrance. */
+const PLAN = {
+  view: [-24, -46, 818, 300],
+  rooms: {
+    bedroom: { pts: '0,0 180,0 180,180 0,180', at: [92, 150], dims: '18′ × 15′' },
+    bath:    { pts: '180,0 290,0 290,140 180,140', at: [228, 112], dims: '14′ × 11′' },
+    living:  { pts: '290,0 550,0 550,180 290,180', at: [420, 162], dims: '26′ × 18′' },
+    kitchen: { pts: '550,0 770,0 770,160 640,160 640,180 550,180', at: [690, 145], dims: '22′ × 16′' },
+  },
+  minor: [['WC', 235, 163], ['Gallery', 420, 202], ['Entry', 705, 190]],
+  walls: 'M0,0V220H685 M735,220H770V0 M180,0V100 M180,130V180H175 M0,180H140 M180,140H290 M290,0V180H250 M220,180H180 M550,0V30 M550,150V180 M640,160H770 M640,160V180',
+  glass: 'M0,-3H770 M0,3H770 M90,-3V3 M180,-3V3 M235,-3V3 M290,-3V3 M420,-3V3 M550,-3V3 M660,-3V3',
+  doors: 'M175,180V145A35,35 0 0 0 140,180 M180,130H210A30,30 0 0 0 180,100 M250,180V150A30,30 0 0 0 220,180',
+  entry: 'M685,220V195A25,25 0 0 1 710,220 M735,220V195A25,25 0 0 0 710,220',
+  furniture: [
+    'M24,34h122v112h-122z', 'M12,48h70v70h-70z', 'M16,53h14v26h-14z', 'M16,87h14v26h-14z', 'M12,32h16v12h-16z', 'M12,122h16v12h-16z', 'M90,56h10v54h-10z', // bed, pillows, side tables, bench
+    'M235,16a34,16 0 1 0 0.1,0', 'M266,52h18v70h-18z', 'M275,72a6,6 0 1 0 0.1,0', 'M275,102a6,6 0 1 0 0.1,0', // tub, vanity, basins
+    'M266,152a6,9 0 1 0 0.1,0', 'M196,154a6,6 0 1 0 0.1,0', // WC, basin
+    'M318,36h200v114h-200z', 'M336,62Q336,134 404,134Q472,134 472,62', 'M404,80a14,14 0 1 0 0.1,0', 'M490,98a13,13 0 1 0 0.1,0', // rug, curved sofa, table, chair
+    'M615,26a26,44 0 1 0 0.1,0', 'M579,44a6,6 0 1 0 0.1,0', 'M579,70a6,6 0 1 0 0.1,0', 'M579,96a6,6 0 1 0 0.1,0', 'M651,44a6,6 0 1 0 0.1,0', 'M651,70a6,6 0 1 0 0.1,0', 'M651,96a6,6 0 1 0 0.1,0', 'M615,12a6,6 0 1 0 0.1,0', 'M615,128a6,6 0 1 0 0.1,0', // dining
+    'M688,40h24v84h-24z', 'M748,8h16v144h-16z', 'M660,8h88v14h-88z', 'M652,190h30v10h-30z', // island, counters, console
+  ],
+};
+const mapEl = $('minimap');
+const svgEl = (tag, attrs) => {
+  const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+};
+const planPos = ([x, y]) => { const [vx, vy, vw, vh] = PLAN.view; return [(x - vx) / vw * 100, (y - vy) / vh * 100]; };
+function buildMinimap() {
+  const svg = $('mmPlan'), [vx, vy, vw, vh] = PLAN.view;
+  svg.setAttribute('viewBox', PLAN.view.join(' '));
+  let grid = '';
+  for (let x = 0; x <= 780; x += 20) grid += `M${x},${vy}V${vy + vh}`;
+  for (let y = -40; y <= vy + vh; y += 20) grid += `M${vx},${y}H${vx + vw}`;
+  svg.append(svgEl('path', { d: grid, class: 'mm-grid' }));
+  for (const [room, { pts }] of Object.entries(PLAN.rooms)) {
+    const p = svgEl('polygon', { points: pts, class: 'mm-room', 'data-room': room });
+    p.addEventListener('click', () => go(room));
+    svg.append(p);
+  }
+  svg.append(svgEl('path', { d: 'M0,180H770V220H0Z M640,160H770V180H640Z', class: 'mm-room', style: 'pointer-events:none' }));
+  for (const d of PLAN.furniture) svg.append(svgEl('path', { d, class: 'mm-furn' }));
+  svg.append(svgEl('path', { d: PLAN.glass, class: 'mm-glass' }),
+    svgEl('path', { d: PLAN.walls, class: 'mm-wall' }),
+    svgEl('path', { d: PLAN.doors, class: 'mm-door' }),
+    svgEl('path', { d: PLAN.entry, class: 'mm-door mm-entry' }));
+  const water = svgEl('text', { x: 385, y: -20, 'text-anchor': 'middle', class: 'mm-note' });
+  water.textContent = 'WATERFRONT';
+  svg.append(water);
+  const label = (cls, at, html) => {
+    const el = document.createElement(cls === 'minor' ? 'span' : 'button');
+    el.className = 'mm-label' + (cls ? ' ' + cls : '');
+    const [l, t] = planPos(at);
+    el.style.left = l + '%';
+    el.style.top = t + '%';
+    el.innerHTML = html;
+    return el;
+  };
+  $('mmInner').append(
+    ...PLAN.minor.map(([name, x, y]) => label('minor', [x, y], name)),
+    ...Object.entries(PLAN.rooms).map(([room, { at, dims }]) => {
+      const b = label('', at, `${shortName(room)}<small>${dims}</small>`);
+      b.type = 'button';
+      b.dataset.room = room;
+      b.setAttribute('aria-label', `Go to the ${NODES[room].title}`);
+      b.onclick = () => go(room);
+      return b;
+    }),
+    Object.assign(document.createElement('i'), { className: 'mm-you', id: 'mmYou' }));
+  $('mmToggle').onclick = () => {
+    const closed = mapEl.classList.toggle('closed');
+    $('mmToggle').setAttribute('aria-expanded', !closed);
+  };
+}
+// "You are here": the room lights up, and a dot sits in it (just above its label).
+function markMinimap(room) {
+  mapEl.querySelectorAll('[data-room]').forEach(el => {
+    el.classList.toggle('here', el.dataset.room === room);
+    if (el.tagName === 'BUTTON') el.toggleAttribute('aria-current', el.dataset.room === room);
+  });
+  const r = PLAN.rooms[room], you = $('mmYou');
+  if (!r || !you) return;
+  const [l, t] = planPos([r.at[0], r.at[1] - 44]);
+  you.style.left = l + '%';
+  you.style.top = t + '%';
 }
 
 function chip(label, node, current) {
@@ -640,10 +837,11 @@ function renderPins() {
 
 /* Input: wheel, swipe, keys, pointer look-around */
 const step = dir => {
-  const i = ORDER.indexOf(target) + dir;
-  if (ORDER[i]) go(ORDER[i]);
+  const order = pano ? ORDER.filter(n => n !== 'plan') : ORDER;
+  const i = order.indexOf(target) + dir;
+  if (order[i]) go(order[i]);
 };
-const up = () => { const p = NODES[target].parent; if (p) go(p); };
+const up = () => { const p = pano && PANOS[target] ? 'tower' : NODES[target].parent; if (p) go(p); };
 $('back').onclick = up;
 
 let wheelSum = 0, wheelLock = 0;
@@ -697,7 +895,7 @@ if (!reducedMotion && matchMedia('(pointer: fine)').matches) {
 /* Preload: clips become in-memory blobs so playback starts instantly. Without them, the clips still stream. */
 async function preload() {
   Object.values(NODES).forEach(n => { new Image().src = stillUrl(n.still); });
-  if (pano) Object.keys(PANOS).forEach(r => pano.load(panoUrl(r)).catch(() => {}));
+  if (pano) { Object.keys(PANOS).forEach(r => pano.load(panoUrl(r)).catch(() => {})); preloadEntry(); }
   // With 360° rooms nothing plays a clip any more: the clips are only the fallback without WebGL.
   const clipEdges = pano ? [] : EDGES;
   const queue = [...clipEdges.map(([a, b]) => clipUrl(a, b)), ...clipEdges.map(([a, b]) => clipUrl(b, a))];
@@ -733,10 +931,13 @@ function start() {
   personalise();
   buildFloors();
   buildZones();
-  const hash = location.hash.slice(1);
+  if (pano) buildMinimap();
+  let hash = location.hash.slice(1);
+  if (pano && hash === 'plan') hash = 'living';
   if (NODES[hash] && hash !== 'tower') {
     current = target = hash;
-    showStill(PANOS[hash] && pano ? 'plan' : hash);
+    if (pano) markMinimap(hash);
+    showStill(PANOS[hash] && pano ? 'tower' : hash);
     if (pano && PANOS[hash]) enterRoom(hash, true).then(renderPins);
   }
   renderDock();

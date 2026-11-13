@@ -182,3 +182,80 @@ body:not(.pano-on) .doors .pin { pointer-events: none; }
 }
 .look-hint::before { content: "360°"; color: var(--brass); font-size: 12px; font-weight: 600; }
 .look-hint[hidden] { display: none; }
+
+/* Arriving on a floor: a photograph of the residence's front door. The doorway is cut out of the wall photo and the two
+   door leaves are separate pictures, so they can swing open onto the living room's 360° view underneath. */
+.entry { position: fixed; inset: 0; z-index: 2; display: none; overflow: hidden; pointer-events: none; }
+.entry.on { display: block; }
+.entry-scene { position: absolute; inset: 0; will-change: transform; }
+/* The photo covers the screen like a background; --ar and the door rectangle (% of the photo) come from the script. */
+.entry-photo {
+  position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  width: max(100vw, calc(100vh * var(--ar, 1.768))); height: max(100vh, calc(100vw / var(--ar, 1.768)));
+}
+.entry-wall { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.entry-frame { position: absolute; left: var(--dl); top: var(--dt); width: var(--dw); height: var(--dh); }
+.leaf { position: absolute; top: 0; width: 50%; height: 100%; display: block; backface-visibility: visible; }
+.leaf.l { left: 0; transform-origin: 0 50%; }
+.leaf.r { right: 0; transform-origin: 100% 50%; }
+/* Warm light falls out across the polished floor as the doors open. */
+.entry-spill {
+  position: absolute; left: calc(var(--dl) - var(--dw) * .6); top: calc(var(--dt) + var(--dh)); width: calc(var(--dw) * 2.2); height: 40%;
+  opacity: 0; mix-blend-mode: screen;
+  background: radial-gradient(ellipse 45% 55% at 50% 0, rgba(255, 210, 150, .55), transparent 72%);
+}
+/* The residence number, in brass beside the door. */
+.plaque {
+  position: absolute; left: calc(var(--dl) + var(--dw) + var(--dw) * .07); top: calc(var(--dt) + var(--dh) * .3);
+  font: 400 1em/1 var(--serif); color: #e7c88f; white-space: nowrap;
+  text-shadow: 0 1px 0 rgba(60, 40, 15, .6), 0 0 .5em rgba(255, 205, 140, .35);
+}
+
+/* The floor plan, as a minimap in the corner while you're in the residence. */
+.minimap {
+  position: fixed; z-index: 3; right: 16px; top: 52px; width: min(320px, 34vw); padding: 4px 6px 6px;
+  background: var(--ink-soft); border: 1px solid var(--line); border-radius: 12px;
+  -webkit-backdrop-filter: blur(16px); backdrop-filter: blur(16px);
+  opacity: 0; transform: translateY(-6px); pointer-events: none;
+  transition: opacity 360ms var(--ease), transform 360ms var(--ease);
+}
+body.pano-on:not(.arriving) .minimap { opacity: 1; transform: none; pointer-events: auto; }
+.mm-head { display: flex; align-items: baseline; gap: 8px; width: 100%; padding: 4px 4px 6px; text-align: left; }
+.mm-head strong { font: 400 16px/1 var(--serif); }
+.mm-head small { font-size: 11px; color: var(--cream-dim); }
+.mm-head svg { margin-left: auto; align-self: center; color: var(--cream-dim); transition: transform 200ms var(--ease); }
+.minimap.closed .mm-head { padding-bottom: 2px; }
+.minimap.closed .mm-head svg { transform: rotate(180deg); }
+.minimap.closed .mm-map { display: none; }
+/* A drawn architectural plan: walls, glazing, door swings and furniture, on a faint blueprint grid. */
+.minimap { width: min(400px, 38vw); }
+.mm-map { position: relative; aspect-ratio: 818 / 300; overflow: hidden; border-radius: 8px; background: #0c1332; }
+.mm-map svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.mm-grid { stroke: rgba(150, 180, 255, .07); stroke-width: 1; vector-effect: non-scaling-stroke; fill: none; }
+.mm-room { fill: rgba(246, 238, 222, .03); cursor: pointer; transition: fill 200ms linear; }
+.mm-room:hover { fill: rgba(255, 214, 150, .12); }
+.mm-room.here { fill: rgba(227, 187, 130, .26); }
+.mm-wall { stroke: #efe4cf; stroke-width: 7; stroke-linecap: square; fill: none; pointer-events: none; }
+.mm-glass { stroke: rgba(150, 200, 255, .75); stroke-width: 1; vector-effect: non-scaling-stroke; fill: none; pointer-events: none; }
+.mm-door { stroke: rgba(239, 228, 207, .7); stroke-width: 1; vector-effect: non-scaling-stroke; fill: none; pointer-events: none; }
+.mm-entry { stroke: var(--brass); }
+.mm-furn { stroke: rgba(239, 228, 207, .3); stroke-width: 1; vector-effect: non-scaling-stroke; fill: none; pointer-events: none; }
+.mm-note { fill: rgba(150, 200, 255, .6); font: 600 13px var(--sans); letter-spacing: .3em; pointer-events: none; }
+.mm-label {
+  position: absolute; transform: translate(-50%, -50%); display: grid; justify-items: center; gap: 1px;
+  padding: 2px 6px; border-radius: 5px; white-space: nowrap; line-height: 1.1;
+  font-size: 9.5px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase; color: var(--cream);
+  transition: background 160ms linear, color 160ms linear;
+}
+.mm-label small { font-size: 8.5px; font-weight: 400; letter-spacing: .02em; text-transform: none; color: var(--cream-dim); }
+.mm-label.minor { pointer-events: none; font-size: 8px; color: var(--cream-dim); }
+.mm-label:not(.minor):hover { background: rgba(246, 238, 222, .14); }
+.mm-label.here { background: var(--cream); color: var(--ink); }
+.mm-label.here small { color: rgba(10, 16, 48, .65); }
+.mm-you { position: absolute; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: var(--brass); border: 1.5px solid var(--cream); box-shadow: 0 0 0 0 rgba(227, 187, 130, .7); animation: ping 2s infinite; pointer-events: none; transition: left 600ms var(--ease), top 600ms var(--ease); }
+@media (max-width: 820px) {
+  .minimap { top: 46px; right: 10px; width: min(250px, 62vw); padding: 2px 4px 4px; }
+  .mm-head strong { font-size: 14px; }
+  .mm-label { font-size: 7.5px; padding: 1px 3px; }
+  .mm-label small, .mm-label.minor { display: none; }
+}

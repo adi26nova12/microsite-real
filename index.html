@@ -33,7 +33,25 @@
 
 <div class="pano-wrap" aria-hidden="true"><canvas class="pano" id="pano"></canvas></div>
 <div class="dip" id="dip" aria-hidden="true"></div>
+<!-- The residence's front door: it opens onto the living room when you arrive on a floor. -->
+<div class="entry" id="entry" aria-hidden="true">
+  <div class="entry-scene" id="entryScene">
+    <div class="entry-photo" id="entryPhoto">
+      <img class="entry-wall" id="entryWall" alt="" decoding="async">
+      <div class="entry-spill" id="entrySpill"></div>
+      <p class="plaque" id="plaque"></p>
+      <div class="entry-frame" id="entryFrame"><img class="leaf l" alt="" decoding="async"><img class="leaf r" alt="" decoding="async"></div>
+    </div>
+  </div>
+</div>
 <div class="doors" id="doors"></div>
+<aside class="minimap" id="minimap" aria-label="Floor plan">
+  <button class="mm-head" id="mmToggle" type="button" aria-expanded="true">
+    <strong id="mmFloor"></strong><small>Floor plan</small>
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true"><path d="M6 15l6-6 6 6" fill="none" stroke="currentColor" stroke-width="1.6"/></svg>
+  </button>
+  <div class="mm-map" id="mmInner"><svg id="mmPlan" role="img" aria-label="Floor plan of the residence"></svg></div>
+</aside>
 <p class="look-hint" id="lookHint" role="status" hidden></p>
 
 <header class="top">
